@@ -33,14 +33,20 @@ class mongodb_synic():
         self.client = pymongo.MongoClient(self.host, username=self.username, password=self.password, port=self.port,
                                           authSource=self.authSource)
         self.db = self.client[self.db_name]
-        self.collection = self.db[self.collection_name]
+        self.collection = {}
+        self.collection['fn'] = self.db[self.collection_name + '_fn']
+        self.collection['1g'] = self.db[self.collection_name + '_1g']
+        self.collection['2g'] = self.db[self.collection_name + '_2g']
+        self.collection['3g'] = self.db[self.collection_name + '_3g']
 
     def do_drop(self):
         """
         # empty a collections of db
         :return:
         """
-        self.collection.drop()
+        for type in self.collection:
+            self.collection.get(type).drop()
+
 
     def do_add(self, string_lists):
         """
@@ -54,9 +60,13 @@ class mongodb_synic():
                 [bf.add(element) for element in string_lists.get(key)]
                 bf_pickle = cPickle.dumps(bf)
                 document[key] = bf_pickle
-                self.collection.save(document)
-                size = sys.getsizeof(document[key])
-                print("save bloom tree into mongoDB: %s \t size is %f M" % (key, size / 1024 / 1024))
+                sig = key.split('_')
+                for type in self.collection:
+                    if type == sig[len(sig) - 1]:
+                        self.collection[type].save(document)
+                        size = sys.getsizeof(document[key])
+                        print("save bloom tree into mongoDB: %s \t size is %f M" % (key, size / 1024 / 1024))
+                        break
         except Exception as e:
             print(e)
 
@@ -66,19 +76,20 @@ class mongodb_synic():
         :return: {lib1_fn: count1, lib1_1g: count2, lib1_2g: count3, ..., }
         """
         result = {}
-        cursor = self.collection.find({})
-        for document in cursor:
-            index = 0
-            for key in document:
-                if index == 1:
-                    bf_pickle = document.get(key)
-                    bf = cPickle.loads(bf_pickle)
-                    count = 0
-                    for feature in string_features:
-                        if feature in bf:
-                            count += 1
-                    result[key] = count
-                index += 1
+        for type in self.collection:
+            cursor = self.collection[type].find({})
+            for document in cursor:
+                index = 0
+                for key in document:
+                    if index == 1:
+                        bf_pickle = document.get(key)
+                        bf = cPickle.loads(bf_pickle)
+                        count = 0
+                        for feature in string_features:
+                            if feature in bf:
+                                count += 1
+                        result[key] = count
+                    index += 1
         return result
 
     def do_delete_many(self, documents):
@@ -87,14 +98,16 @@ class mongodb_synic():
         :param documents:
         :return:
         """
-        self.collection.delete_many(documents)
+        for type in self.collection:
+            self.collection[type].delete_many(documents)
 
     def do_count(self):
         """
         # count the number of documents in mongoDB
         :return:
         """
-        return self.collection.count_documents({})
+        for type in self.collection:
+            return self.collection[type].count_documents({})
 
     def do_replace(self, id, document):
         """
@@ -103,9 +116,10 @@ class mongodb_synic():
         :param document:
         :return:
         """
-        old_document = self.collection.find()
-        _id = old_document['_id']
-        self.collection.replace_one({'_id': _id}, document)
+        for type in self.collection:
+            old_document = self.collection[type].find()
+            _id = old_document['_id']
+            self.collection[type].replace_one({'_id': _id}, document)
 
 
 class mongodb_asynic():
@@ -121,10 +135,15 @@ class mongodb_asynic():
         self.client = motor.motor_asyncio.AsyncIOMotorClient(
             'mongodb://%s:%s@%s:%s' % (self.username, self.password, self.host, self.port))
         self.db = self.client[self.db_name]
-        self.collection = self.db[self.collection_name]
+        self.collection = {}
+        self.collection['fn'] = self.db[self.collection_name + '_fn']
+        self.collection['1g'] = self.db[self.collection_name + '_1g']
+        self.collection['2g'] = self.db[self.collection_name + '_2g']
+        self.collection['3g'] = self.db[self.collection_name + '_3g']
 
     async def do_drop(self):
-        await  self.collection.drop()
+        for type in self.collection:
+            await  self.collection[type].drop()
 
     async def do_add(self, string_lists):
         try:
@@ -134,39 +153,47 @@ class mongodb_asynic():
                 [bf.add(element) for element in string_lists.get(key)]
                 bf_pickle = cPickle.dumps(bf)
                 document[key] = bf_pickle
-                size = sys.getsizeof(document[key])
-                await self.collection.insert_one(document=document)
-                print("asynic save bloom tree into mongDB: %s \t size is %f" % (key, size / 1024 / 1024))
+                sig = key.split('_')
+                for type in self.collection:
+                    if type == sig[len(sig) - 1]:
+                        size = sys.getsizeof(document[key])
+                        await self.collection[type].insert_one(document=document)
+                        print("asynic save bloom tree into mongDB: %s \t size is %f" % (key, size / 1024 / 1024))
+                        break
         except Exception as e:
             print(e)
 
     async def do_count(self):
-        return await self.collection.count_documents({})
+        sum = 0
+        for type in self.collection:
+            sum += await self.collection[type].count_documents({})
+        return sum
 
     async def do_query(self, string_features, document_count):
         result = {}
-        cursor = self.collection.find({})
-        for document in await cursor.to_list(document_count):
-            index = 0
-            for key in document:
-                if index == 1:
-                    bf_pickle = document.get(key)
-                    bf = cPickle.loads(bf_pickle)
-                    count = 0
-                    for feature in string_features:
-                        if feature in bf:
-                            count += 1
-                    result[key] = count
-                index += 1
+        for type in self.collection:
+            cursor = self.collection[type].find({})
+            for document in await cursor.to_list(document_count):
+                index = 0
+                for key in document:
+                    if index == 1:
+                        bf_pickle = document.get(key)
+                        bf = cPickle.loads(bf_pickle)
+                        count = 0
+                        for feature in string_features:
+                            if feature in bf:
+                                count += 1
+                        result[key] = count
+                    index += 1
         return result
 
 
 if __name__ == '__main__':
     # load json_file to CPU Memory
-    file_path = './bt_dict.json'
+    file_path = '/home/wufeng/Downloads/bt_dict.json'
     file_read = open(file_path, 'r')
     file_json = json.load(file_read)
-    test_path = './test.txt'
+    test_path = '/home/wufeng/Downloads/test.txt'
     test_strings = []
     with open(test_path, 'r') as test_read:
         for line in test_read.readlines():
@@ -174,7 +201,7 @@ if __name__ == '__main__':
     print(test_strings)
 
     mongodb_synic = mongodb_synic(host='localhost', username='root', password='example', port=27018, authSource='admin',
-                                  db_name='synic_bloom_filter', collection_name='filters')
+                                  db_name='new_synic_bloom_filter', collection_name='filters')
     mongodb_synic.do_drop()
     start_time = time.time()
     mongodb_synic.do_add(file_json)
@@ -186,7 +213,7 @@ if __name__ == '__main__':
 
     mongodb_asynic = mongodb_asynic(host='localhost', username='root', password='example', port=27018,
                                     authSource='admin',
-                                    db_name='asynic_bloom_filter', collection_name='filters')
+                                    db_name='new_asynic_bloom_filter', collection_name='filters')
     loop = asyncio.get_event_loop()
     loop.run_until_complete(mongodb_asynic.do_drop())
     start_time = time.time()
